@@ -66,7 +66,7 @@ class SpeakerContactTests(unittest.TestCase):
         self.assertIn('skip', result['questions'][0]['options'][-1])
 
     def test_no_eligible_cfp_does_not_create_fictional_choices(self):
-        for mutation in [dict(kind='event', registration='open'), dict(cfp_status='closed'),
+        for mutation in [dict(cfp_status='closed'),
                          dict(free=False), dict(language='en'), dict(russian_community=False),
                          dict(checked_at='2026-10-01T09:00:00+03:00')]:
             c = card(); c.update(mutation)
@@ -74,7 +74,35 @@ class SpeakerContactTests(unittest.TestCase):
                 self.assertEqual(speaker.survey([c], NOW)['questions'], [])
                 with self.assertRaises(ValueError):
                     speaker.compose(dict(conferences=[c], selection=payload()['selection']), now=NOW)
-        self.assertEqual(speaker.survey([], NOW)['status'], 'no_verified_cfp')
+        self.assertEqual(speaker.survey([], NOW)['status'], 'no_verified_options')
+
+    def test_listed_event_without_cfp_can_be_selected_honestly(self):
+        c=card(); c.update(kind='event',registration='open',cfp_status='unknown',
+                           starts_at='2026-10-20T10:00:00+03:00')
+        survey=speaker.survey([c],NOW)
+        self.assertEqual(survey['status'],'ready')
+        self.assertIn('возможность выступления нужно уточнить',survey['questions'][0]['options'][0])
+        result=speaker.compose(dict(conferences=[c],selection=payload()['selection']),now=NOW)
+        self.assertIn('Открытый приём докладов пока не подтверждён',result['message'])
+        self.assertIn('выяснить, возможно ли участие',result['message'])
+        self.assertNotIn('CFP:',result['message'])
+        self.assertEqual(len(result['links']),2)
+
+    def test_closed_cfp_on_verified_event_is_not_presented_as_open(self):
+        c=card(); c.update(kind='event',registration='open',cfp_status='closed',
+                           starts_at='2026-10-20T10:00:00+03:00')
+        result=speaker.compose(dict(conferences=[c],selection=payload()['selection']),now=NOW)
+        self.assertIn('CFP уже закрыт',result['message'])
+        self.assertNotIn('подготовиться к подаче',result['message'])
+
+    def test_mixed_cards_keep_a_single_numbering_and_distinct_statuses(self):
+        event=card(); event.update(id='event-1',kind='event',registration='open',
+                                  starts_at='2026-10-20T10:00:00+03:00')
+        options=speaker.survey([event,card()],NOW)['questions'][0]['options']
+        self.assertTrue(options[0].startswith('1. event-1'))
+        self.assertTrue(options[1].startswith('2. qa-1'))
+        self.assertIn('нужно уточнить',options[0])
+        self.assertIn('CFP открыт',options[1])
 
     def test_opt_out_has_no_message_and_no_contacts(self):
         result = speaker.compose(dict(conferences=[], selection=dict(conference_id='skip')), now=NOW)

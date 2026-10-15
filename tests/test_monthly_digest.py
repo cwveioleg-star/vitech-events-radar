@@ -157,7 +157,7 @@ class MonthlyDigestTests(unittest.TestCase):
         self.assertIn('Asia/Yekaterinburg',result['prompt'])
         self.assertIn('API',result['prompt'])
         self.assertNotIn('schedule',result['tool_arguments'])
-        self.assertIn('[vitech-events-radar:personal:v2]',result['prompt'])
+        self.assertIn('[vitech-events-radar:personal:v3]',result['prompt'])
 
     def test_refresh_without_saved_profile_needs_review(self):
         result=monthly.build_plan(setup(existing_tasks=[existing()],refresh_prompt=True),NOW)
@@ -169,9 +169,18 @@ class MonthlyDigestTests(unittest.TestCase):
 
     def test_background_prompt_has_coverage_filter_and_selection(self):
         prompt=monthly.build_plan(setup(),NOW)['task']['prompt']
-        for value in ('100','AvitoTech','Alfa Digital','неполная проверка','русскоязычные',
+        for value in ('100','habr.com/ru/specials/965986/','6 календарных месяцев','Timepad','публичный Telegram','неполная проверка','русскоязычные',
                       'двумя короткими вопросами','без повторного согласования','Loop','Telegram'):
             self.assertIn(value,prompt)
+
+    def test_background_fallback_contains_entire_registry_and_conditional_handoff(self):
+        prompt=monthly.build_plan(setup(),NOW)['task']['prompt']
+        registry=json.loads((SCRIPT.parents[1]/'references/tech-brands.json').read_text())
+        for brand in registry['brands']:
+            self.assertIn(brand['name'],prompt)
+        self.assertIn('выбери его номер',prompt)
+        self.assertIn('Открытый приём докладов пока не подтверждён',prompt)
+        self.assertIn('не превращай это в вывод'.capitalize(),prompt)
 
     def test_invalid_inputs_fail_closed(self):
         inputs = [[], None, setup(platform=[]), setup(resume='true'), setup(lookup_succeeded=1),

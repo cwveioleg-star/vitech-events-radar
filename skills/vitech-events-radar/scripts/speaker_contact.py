@@ -57,7 +57,7 @@ def eligible(conferences, now):
         if identity in ids or identity == "skip":
             raise ValueError("Conference IDs must be unique")
         ids.add(identity)
-        if card.get("kind") == "cfp" and not reasons(card, now):
+        if card.get("kind") in {"event", "cfp"} and not reasons(card, now):
             result.append(card)
     return result
 
@@ -65,12 +65,14 @@ def eligible(conferences, now):
 def survey(conferences, now=None):
     cards = eligible(conferences, now or datetime.now(timezone.utc))
     if not cards:
-        return {"status": "no_verified_cfp", "questions": []}
-    choices = [f"{c['id']} · {c['name']}" for c in cards[:9]] + ["skip · Пока не выбираю"]
+        return {"status": "no_verified_options", "questions": []}
+    choices = [f"{i}. {c['id']} · {c['name']} · " +
+               ("CFP открыт" if c['kind'] == 'cfp' else "возможность выступления нужно уточнить")
+               for i, c in enumerate(cards[:9], 1)] + ["skip · Пока не выбираю"]
     return {"status": "ready", "questions": [
-        {"question": "На какую конференцию хочешь податься с докладом?",
+        {"question": "Какое из этих событий тебе интересно для участия как спикеру?",
          "options": choices, "type": "single_select",
-         "free_text_placeholder": "Другая конференция — сначала проверим её CFP"},
+         "free_text_placeholder": "Можно написать номер события; новую конференцию сначала проверим"},
         {"question": "У тебя уже есть идея темы?",
          "options": ["has_idea · Есть идея", "no_idea · Пока нет идеи"],
          "type": "single_select", "free_text_placeholder": "Можно сразу написать идею темы"},
@@ -89,7 +91,7 @@ def compose(data, contact=None, now=None):
     cards = eligible(data.get("conferences"), now or datetime.now(timezone.utc))
     card = next((c for c in cards if c["id"] == identity), None)
     if card is None:
-        raise ValueError("Selected conference needs a fresh eligible CFP card")
+        raise ValueError("Selected event needs a fresh verified card")
     state = choice.get("topic_state")
     if state not in STATES:
         raise ValueError("Choose whether a topic idea exists")
@@ -100,14 +102,28 @@ def compose(data, contact=None, now=None):
         raise ValueError("Conflicting topic answers")
     contact = contact or load_contact()
     topic_line = (f"У меня есть идея темы: «{topic}»." if topic else "У меня уже есть идея темы.") if state == "has_idea" else "Пока нет идеи темы."
-    message = "\n".join([
+    open_cfp = card["kind"] == "cfp"
+    status = card.get("cfp_status", "unknown")
+    if status not in {"open", "closed", "unknown", "not_announced"}:
+        raise ValueError("Invalid CFP status")
+    lines = [
         clean(contact["greeting"]),
-        f"Хочу выступить на конференции «{clean(card['name'])}».",
+        (f"Хочу выступить на конференции «{clean(card['name'])}»." if open_cfp else
+         f"Мне интересно выступить на событии «{clean(card['name'])}»."),
         topic_line,
-        "Помоги, пожалуйста, собрать фактуру и подготовиться к подаче.",
+    ]
+    if open_cfp:
+        lines.append("Помоги, пожалуйста, собрать фактуру и подготовиться к подаче.")
+    else:
+        lines.append("Опубликованный CFP уже закрыт." if status == "closed" else
+                     "Открытый приём докладов пока не подтверждён.")
+        lines.append("Помоги, пожалуйста, выяснить, возможно ли участие как спикера, и, если возможно, собрать фактуру.")
+    lines += [
         f"Конференция: {https(card['primary_url'])}",
-        f"CFP: {https(card['url'])}",
-    ])
+    ]
+    if open_cfp:
+        lines.append(f"CFP: {https(card['url'])}")
+    message = "\n".join(lines)
     return {"status": "ready", "message": message,
             "loop_label": clean(contact["loop_label"]),
             "links": {"loop": https(contact["loop_url"]), "telegram": https(contact["telegram_url"])}}

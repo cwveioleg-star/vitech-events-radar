@@ -17,7 +17,7 @@ for doc in [root/'README.md',root/'AGENTS.md',*s.rglob('*.md')]:
 for path in ('references/quality-rules.md','scripts/check_candidates.py','agents/openai.yaml',
              'assets/profile.example.json','references/devrel-contact.md','references/selection-flow.md',
              'assets/speaker-message.md','scripts/speaker_contact.py','scripts/research_audit.py',
-             'references/monthly-digest.md','scripts/monthly_digest.py'):
+             'references/monthly-digest.md','scripts/monthly_digest.py','references/tech-brands.json'):
     assert (s/path).is_file(),path
 for old in ('assets/team-digest.md','assets/cfp-digest.md','references/speaker-support.md'):
     assert not (s/old).exists(),old
@@ -25,7 +25,13 @@ for f in s.rglob('*'):
     if f.is_file() and '__pycache__' not in f.parts and f.suffix in ('.md','.py','.json','.yaml'):
         assert 'TODO' not in f.read_text(),f
         assert 'mailto:' not in f.read_text(),f
-assert (root/'VERSION').read_text().strip()=='0.4.2'
-assert 'v0.4.2' in (root/'README.md').read_text()
+version=(root/'VERSION').read_text().strip()
+assert re.fullmatch(r'\d+\.\d+\.\d+',version)
+assert f'v{version}' in (root/'README.md').read_text()
+registry=json.loads((s/'references/tech-brands.json').read_text())
+assert registry['source_url']=='https://habr.com/ru/specials/965986/'
+assert len(registry['brands'])==126
+assert len({b['id'] for b in registry['brands']})==126
+assert len({b['name'].casefold() for b in registry['brands']})==126
 assert json.loads((s/'assets/profile.example.json').read_text())['languages']==['ru']
 print('Structure, local references and personal distribution: OK')
