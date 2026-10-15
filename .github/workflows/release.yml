@@ -1,0 +1,45 @@
+name: Publish version
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-vitech-events-radar
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 tests/validate_structure.py
+      - run: python3 -m unittest discover -s tests -v
+      - name: Publish immutable release and archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          radar_version="$(cat VERSION)"
+          [[ "$radar_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          radar_tag="v$radar_version"
+          if gh release view "$radar_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; leaving it unchanged."
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$radar_tag" >/dev/null 2>&1; then
+            echo "Tag already exists without a release; review it before publishing."
+            exit 1
+          fi
+          mkdir -p dist
+          radar_archive="dist/vitech-events-radar-$radar_tag.zip"
+          git archive --format=zip --prefix=vitech-events-radar/ HEAD -o "$radar_archive"
+          python3 -c 'from pathlib import Path; t=Path("CHANGELOG.md").read_text(); Path("dist/release-notes.md").write_text(t.split("\n## ",2)[1].split("\n",1)[1].strip()+"\n")'
+          gh release create "$radar_tag" "$radar_archive" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Vi.Tech Events Radar $radar_tag" --notes-file dist/release-notes.md

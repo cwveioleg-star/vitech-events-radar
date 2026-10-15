@@ -1,0 +1,35 @@
+# Машиночитаемая карточка
+
+```json
+{
+  "id": "cfp-1",
+  "kind": "cfp",
+  "name": "Синтетический пример — не реальное событие",
+  "starts_at": "2027-02-01T10:00:00+03:00",
+  "url": "https://example.org/cfp",
+  "primary_url": "https://example.org/conference",
+  "checked_at": "2026-10-15T09:00:00+03:00",
+  "topics": ["QA"],
+  "audience": "QA-инженер",
+  "format": "online",
+  "accessible": true,
+  "primary_verified": true,
+  "free": true,
+  "language": "ru",
+  "russian_community": true,
+  "cfp_status": "open",
+  "deadline": "2026-11-01T23:59:00+03:00",
+  "evidence": {
+    "date": "Текущий год и дата на странице организатора",
+    "status": "Прочитана открытая форма",
+    "price": "Организатор подтвердил 0 ₽ для указанного формата конференции",
+    "language": "В описании указаны доклады на русском",
+    "community": "Подтверждён российский организатор/сообщество",
+    "deadline": "Срок указан на странице CFP"
+  }
+}
+```
+
+Для kind=event: registration=open/not_required вместо cfp_status/deadline. Все общие обязательные поля сохраняются. Заполняй по реальным прочитанным источникам; пример — только схема. Один ID связывает карточку с опросом; одинаковые события/форматы не дублировать.
+
+Вызов: `python3 scripts/check_candidates.py карточки.json --now ISO8601 --days 30`. Он не проверяет журнал 100 источников — отдельно выполни research_audit.py. Ни один скрипт сам не подтверждает факты в вебе.

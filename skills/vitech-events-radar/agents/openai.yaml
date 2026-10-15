@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vi.Tech Events Radar"
+  short_description: "Бесплатные события под твой профиль и выбор CFP"
+  default_prompt: "Используй $vitech-events-radar: найди события под мой профиль и предложи выбрать конференцию и наличие идеи темы."

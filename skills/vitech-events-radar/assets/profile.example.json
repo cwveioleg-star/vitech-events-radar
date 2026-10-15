@@ -1,0 +1,17 @@
+{
+  "role": "QA-инженер",
+  "topics": [
+    "автотесты",
+    "API"
+  ],
+  "city": null,
+  "formats": [
+    "online"
+  ],
+  "languages": [
+    "ru"
+  ],
+  "event_limit": 4,
+  "cfp_limit": 3,
+  "offer_speaker_help": true
+}
