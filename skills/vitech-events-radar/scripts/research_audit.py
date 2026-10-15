@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-KINDS = {"calendar", "event", "registration", "cfp", "community"}
+KINDS = {"aggregator", "calendar", "event", "registration", "cfp", "community"}
 REGISTRY = Path(__file__).resolve().parents[1] / "references/tech-brands.json"
-ROUTES = {"calendar", "timepad", "telegram", "cfp"}
+ROUTES = {"calendar", "cfp"}
+OPTIONAL_ROUTES = {"timepad", "telegram"}
 NOISE = {"page", "p", "offset", "limit", "sort", "order", "from", "ref", "fbclid", "gclid", "yclid"}
 
 
@@ -33,8 +34,11 @@ def add_months(day, months):
 
 
 def fresh(value, now):
-    checked = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return checked.tzinfo is not None and checked.utcoffset() is not None and timedelta(0) <= now - checked <= timedelta(hours=24)
+    try:
+        checked = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return checked.tzinfo is not None and checked.utcoffset() is not None and timedelta(0) <= now - checked <= timedelta(hours=24)
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def traced(value):
@@ -42,17 +46,49 @@ def traced(value):
                                            for k in ("tool_ref", "evidence"))
 
 
+def brand_ids(brands):
+    if not isinstance(brands, list) or not brands:
+        raise ValueError("Expected a nonempty brand registry")
+    if any(not isinstance(b, dict) or not isinstance(b.get("id"), str) or not b["id"].strip()
+           or not isinstance(b.get("name"), str) or not b["name"].strip() for b in brands):
+        raise ValueError("Invalid brand registry")
+    ids = {b["id"] for b in brands}
+    if len(ids) != len(brands) or len({b["name"].strip().casefold() for b in brands}) != len(brands):
+        raise ValueError("Duplicate brand identities")
+    return ids
+
+
+def working_registry(bundle, now):
+    snapshot = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    supplied = bundle.get("registry")
+    if supplied is None:
+        return brand_ids(snapshot["brands"]), {"registry_source": snapshot["source_url"],
+                "registry_fresh": False, "registry_snapshot_on": snapshot["refreshed_on"]}
+    if not isinstance(supplied, dict) or not traced(supplied) or not fresh(supplied.get("checked_at", ""), now):
+        raise ValueError("A current registry needs a fresh read trace")
+    source = canonical(supplied.get("source_url"))
+    ids = brand_ids(supplied.get("brands"))
+    return ids, {"registry_source": source, "registry_fresh": True, "registry_snapshot_on": None}
+
+
 def coverage(bundle, records, counted, now):
-    """Validate breadth separately from page count. This cannot prove web facts."""
-    registry = json.loads(REGISTRY.read_text(encoding="utf-8"))["brands"]
-    ids = {b["id"] for b in registry}
+    """Check the declared plan, never infer an exhaustive market search."""
+    ids, registry_info = working_registry(bundle, now)
     extras = bundle.get("extra_brands", [])
-    if not isinstance(extras, list) or any(not isinstance(b, dict) or not b.get("id") or not b.get("name") for b in extras):
-        raise ValueError("Invalid additional brands")
-    extra_ids = [b["id"] for b in extras]
-    if any(not isinstance(identity, str) for identity in extra_ids) or len(set(extra_ids)) != len(extra_ids) or ids.intersection(extra_ids):
-        raise ValueError("Additional brand IDs must be new and unique")
-    ids.update(extra_ids)
+    if extras:
+        new_ids = brand_ids(extras)
+        if ids.intersection(new_ids):
+            raise ValueError("Additional brand IDs must be new")
+        ids.update(new_ids)
+    elif not isinstance(extras, list):
+        raise ValueError("Expected additional brands")
+    mode = bundle.get("mode", "targeted")
+    if mode not in {"targeted", "full"}:
+        raise ValueError("Unknown research mode")
+    selected = bundle.get("selected_brand_ids", [])
+    if not isinstance(selected, list) or any(not isinstance(i, str) or i not in ids for i in selected):
+        raise ValueError("Selected brands must belong to the working registry")
+    required = ids if mode == "full" else set(selected)
     scope = bundle.get("cfp_search", {})
     if not isinstance(scope, dict):
         raise ValueError("Expected CFP search scope")
@@ -62,27 +98,34 @@ def coverage(bundle, records, counted, now):
         starts = datetime.fromisoformat(scope["from"]).date()
         ends = datetime.fromisoformat(scope["through"]).date()
         months = scope.get("months", 6)
-        horizon = type(months) is int and months >= 4 and starts == now.date() and ends >= add_months(starts, months)
+        horizon = type(months) is int and 1 <= months <= 24 and starts == now.date() and ends >= add_months(starts, months)
     except (KeyError, TypeError, ValueError, AttributeError):
         pass
     checks = bundle.get("brand_checks", [])
     if not isinstance(checks, list):
         raise ValueError("Expected brand checks")
-    checked_ids, cfp_ids, seen = set(), set(), set()
+    checked_ids, cfp_ids, seen, optional_gaps = set(), set(), set(), []
     for check in checks:
         try:
             identity = check["brand_id"]
-            if identity not in ids or identity in seen:
-                raise ValueError("Unknown or duplicate brand")
+            if identity not in required or identity in seen:
+                continue
             seen.add(identity)
             if not fresh(check["checked_at"], now):
                 continue
             routes = check["routes"]
-            if not isinstance(routes, list) or len(routes) != len(ROUTES) or {r["kind"] for r in routes} != ROUTES:
+            if not isinstance(routes, list) or any(not isinstance(r, dict) for r in routes):
+                continue
+            kinds = [r.get("kind") for r in routes]
+            if len(kinds) != len(set(kinds)) or not ROUTES.issubset(kinds):
                 continue
             for route in routes:
-                if not traced(route) or route.get("status") not in {"read", "not_found"}:
-                    raise ValueError("Unresolved route")
+                if route["kind"] in OPTIONAL_ROUTES:
+                    if route.get("status") in {"blocked", "snippet_only", "error"}:
+                        optional_gaps.append(identity + ":" + route["kind"])
+                    continue
+                if route["kind"] not in ROUTES or not traced(route) or route.get("status") not in {"read", "not_found"}:
+                    raise ValueError("Unresolved core route")
                 indices = route.get("read_indices", [])
                 if route["status"] == "read":
                     if not isinstance(indices, list) or not indices:
@@ -96,26 +139,41 @@ def coverage(bundle, records, counted, now):
                 cfp_ids.add(identity)
         except (KeyError, TypeError, ValueError, AttributeError):
             continue
+    discovery = bundle.get("discovery_searches", [])
+    if not isinstance(discovery, list):
+        raise ValueError("Expected discovery searches")
+    channels, traces = set(), set()
+    for search in discovery:
+        try:
+            if traced(search) and fresh(search.get("checked_at", ""), now) and search.get("kind") in {"aggregator", "web", "community", "calendar"}:
+                channels.add(search["kind"])
+                traces.add(search["tool_ref"])
+        except (TypeError, ValueError, AttributeError):
+            continue
+    discovery_ok = len(channels) >= 2 and len(traces) >= 2
     community = scope.get("community_searches", [])
     community_ok = isinstance(community, list) and bool(community) and all(traced(c) for c in community)
-    complete = horizon and cfp_ids == ids and community_ok and scope.get("unresolved") == []
-    return {"brands_total": len(ids), "brands_checked": len(checked_ids),
-            "missing_brands": sorted(ids - checked_ids),
-            "brand_coverage_complete": checked_ids == ids,
+    complete = horizon and cfp_ids == required and community_ok and scope.get("unresolved") == []
+    return {"mode": mode, **registry_info, "brands_total": len(ids), "brands_selected": len(required),
+            "brands_checked": len(checked_ids), "missing_brands": sorted(required - checked_ids),
+            "brand_coverage_complete": checked_ids == required, "discovery_complete": discovery_ok,
+            "optional_route_gaps": sorted(set(optional_gaps)),
             "cfp_from": starts.isoformat() if starts else None,
             "cfp_through": ends.isoformat() if ends else None,
-            "cfp_horizon_complete": bool(complete),
-            "cfp_missing_brands": sorted(ids - cfp_ids),
-            "no_cfp_claim_allowed": bool(complete and type(scope.get("verified_suitable_count")) is int and scope["verified_suitable_count"] == 0)}
+            "cfp_horizon_complete": bool(complete), "cfp_missing_brands": sorted(required - cfp_ids),
+            "scoped_no_cfp_claim_allowed": bool(complete and discovery_ok and type(scope.get("verified_suitable_count")) is int and scope["verified_suitable_count"] == 0),
+            "no_cfp_claim_allowed": False}
 
 
-def audit(data, now, minimum=100):
+def audit(data, now, minimum=None):
     bundle = data if isinstance(data, dict) else {}
     records = bundle.get("reads") if isinstance(data, dict) else data
     if not isinstance(records, list) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Expected ledger and timezone-aware current time")
-    if type(minimum) is not int or minimum < 100:
-        raise ValueError("Minimum coverage is 100")
+    if minimum is None:
+        minimum = bundle.get("minimum_reads")
+    if minimum is not None and (type(minimum) is not int or minimum < 1):
+        raise ValueError("Explicit read target must be a positive integer")
     seen_urls, seen_ids, domains = set(), set(), set()
     rejected, counted = [], []
     for index, entry in enumerate(records):
@@ -149,13 +207,13 @@ def audit(data, now, minimum=100):
         except (ValueError, TypeError, KeyError, AttributeError):
             rejected.append(index)
     breadth = coverage(bundle, records, set(counted), now)
-    reads_complete = len(counted) >= minimum
-    breadth["no_cfp_claim_allowed"] = reads_complete and breadth["no_cfp_claim_allowed"]
-    return {"complete": reads_complete and breadth["brand_coverage_complete"] and breadth["cfp_horizon_complete"],
+    reads_complete = bool(counted) and (minimum is None or len(counted) >= minimum)
+    breadth["scoped_no_cfp_claim_allowed"] = reads_complete and breadth["scoped_no_cfp_claim_allowed"]
+    return {"complete": reads_complete and breadth["discovery_complete"] and breadth["brand_coverage_complete"] and breadth["cfp_horizon_complete"],
             "reads_complete": reads_complete, **breadth,
             "minimum": minimum, "read_unique": len(counted), "domains": len(domains),
             "counted_indices": counted, "excluded_indices": rejected,
-            "note": "Ledger validation only; the agent must actually read the sources."}
+            "note": "Declared search plan only, not exhaustive market coverage or proof of web reading."}
 
 
 def main():

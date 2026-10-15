@@ -9,7 +9,7 @@ front=t.split('---',2)[1]
 name=re.search(r'^name: (.+)$',front,re.M).group(1)
 assert name==s.name and len(name)<=64 and re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*',name)
 desc=json.loads(re.search(r'^description: (.+)$',front,re.M).group(1))
-assert 0<len(desc)<=1024 and len(t.splitlines())<500
+assert 0<len(desc)<=300 and len(t.splitlines())<500 and len(t.encode())<=9000
 for doc in [root/'README.md',root/'AGENTS.md',*s.rglob('*.md')]:
     for link in re.findall(r'\]\(([^)]+)\)',doc.read_text()):
         if '://' not in link and not link.startswith('#'):
@@ -30,8 +30,12 @@ assert re.fullmatch(r'\d+\.\d+\.\d+',version)
 assert f'v{version}' in (root/'README.md').read_text()
 registry=json.loads((s/'references/tech-brands.json').read_text())
 assert registry['source_url']=='https://habr.com/ru/specials/965986/'
-assert len(registry['brands'])==126
-assert len({b['id'] for b in registry['brands']})==126
-assert len({b['name'].casefold() for b in registry['brands']})==126
+brands=registry['brands']
+assert isinstance(brands,list) and brands
+assert all(isinstance(b.get('id'),str) and b['id'].strip() and isinstance(b.get('name'),str) and b['name'].strip() for b in brands)
+assert len({b['id'] for b in brands})==len(brands)
+assert len({b['name'].strip().casefold() for b in brands})==len(brands)
+from datetime import date
+assert date.fromisoformat(registry['refreshed_on'])<=date.today()
 assert json.loads((s/'assets/profile.example.json').read_text())['languages']==['ru']
 print('Structure, local references and personal distribution: OK')
