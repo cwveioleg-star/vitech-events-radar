@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 # Only bundled code, resolved relative to this script; no third-party dependency.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_candidates import reasons
+from check_candidates import speaker_reasons
 
 CONTACT_FILE = Path(__file__).resolve().parents[1] / "references/devrel-contact.md"
 STATES = {"has_idea", "no_idea"}
@@ -45,7 +45,7 @@ def load_contact():
     return data
 
 
-def eligible(conferences, now):
+def eligible(conferences, now, days=30, months=6):
     if not isinstance(conferences, list):
         raise ValueError("Expected the current verified conference cards")
     ids = set()
@@ -57,18 +57,19 @@ def eligible(conferences, now):
         if identity in ids or identity == "skip":
             raise ValueError("Conference IDs must be unique")
         ids.add(identity)
-        if card.get("kind") in {"event", "cfp"} and not reasons(card, now):
+        if card.get("kind") in {"event", "cfp", "speaker"} and not speaker_reasons(card, now, days, months):
             result.append(card)
     return result
 
 
-def survey(conferences, now=None):
-    cards = eligible(conferences, now or datetime.now(timezone.utc))
+def survey(conferences, now=None, days=30, months=6):
+    cards = eligible(conferences, now or datetime.now(timezone.utc), days, months)
     if not cards:
         return {"status": "no_verified_options", "questions": []}
-    choices = [f"{i}. {c['id']} · {c['name']} · " +
+    positions = {c['id']: i for i, c in enumerate(conferences, 1)}
+    choices = [f"{positions[c['id']]}. {c['id']} · {c['name']} · " +
                ("CFP открыт" if c['kind'] == 'cfp' else "возможность выступления нужно уточнить")
-               for i, c in enumerate(cards[:9], 1)] + ["skip · Пока не выбираю"]
+               for c in cards[:9]] + ["skip · Пока не выбираю"]
     return {"status": "ready", "questions": [
         {"question": "Какое из этих событий тебе интересно для участия как спикеру?",
          "options": choices, "type": "single_select",
@@ -79,16 +80,16 @@ def survey(conferences, now=None):
     ]}
 
 
-def compose(data, contact=None, now=None):
+def compose(data, contact=None, now=None, days=30, months=6):
     if not isinstance(data, dict) or set(data) - {"conferences", "selection"}:
         raise ValueError("Expected verified cards and a selection only")
     choice = data.get("selection")
-    if not isinstance(choice, dict) or set(choice) - {"conference_id", "topic_state", "topic"}:
+    if not isinstance(choice, dict) or set(choice) - {"conference_id", "topic_state", "topic", "topic_fit", "topic_fit_evidence"}:
         raise ValueError("Invalid selection")
     identity = clean(choice.get("conference_id"), 80)
     if identity == "skip":
         return {"status": "skipped", "message": None, "links": {}}
-    cards = eligible(data.get("conferences"), now or datetime.now(timezone.utc))
+    cards = eligible(data.get("conferences"), now or datetime.now(timezone.utc), days, months)
     card = next((c for c in cards if c["id"] == identity), None)
     if card is None:
         raise ValueError("Selected event needs a fresh verified card")
@@ -98,14 +99,18 @@ def compose(data, contact=None, now=None):
     topic = choice.get("topic")
     if topic is not None:
         topic = clean(topic)
+        if choice.get('topic_fit') != 'confirmed':
+            raise ValueError('Check the topic against the event sections and rules first')
+        clean(choice.get('topic_fit_evidence'))
+        topic = re.sub(r'^(?:доклад|выступление|тема)\s+(?:на\s+тему|про|об|о)\s+', '', topic, flags=re.I)
+        topic = re.sub(r'^тема\s*:\s*', '', topic, flags=re.I)
+        topic = topic.strip(' «»“”"').rstrip('.!?').strip()
+        topic = clean(topic)
     if state == "no_idea" and topic:
         raise ValueError("Conflicting topic answers")
     contact = contact or load_contact()
-    topic_line = (f"У меня есть идея темы: «{topic}»." if topic else "У меня уже есть идея темы.") if state == "has_idea" else "Пока нет идеи темы."
+    topic_line = (f"Идея темы: «{topic}»." if topic else "У меня уже есть идея темы.") if state == "has_idea" else "Пока нет идеи темы."
     open_cfp = card["kind"] == "cfp"
-    status = card.get("cfp_status", "unknown")
-    if status not in {"open", "closed", "unknown", "not_announced"}:
-        raise ValueError("Invalid CFP status")
     lines = [
         clean(contact["greeting"]),
         (f"Хочу выступить на конференции «{clean(card['name'])}»." if open_cfp else
@@ -115,14 +120,15 @@ def compose(data, contact=None, now=None):
     if open_cfp:
         lines.append("Помоги, пожалуйста, собрать фактуру и подготовиться к подаче.")
     else:
-        lines.append("Опубликованный CFP уже закрыт." if status == "closed" else
-                     "Открытый приём докладов пока не подтверждён.")
+        lines.append("Открытый приём докладов пока не подтверждён.")
         lines.append("Помоги, пожалуйста, выяснить, возможно ли участие как спикера, и, если возможно, собрать фактуру.")
     lines += [
         f"Конференция: {https(card['primary_url'])}",
     ]
     if open_cfp:
         lines.append(f"CFP: {https(card['url'])}")
+    else:
+        lines.append(f"Спикерам: {https(card['speaker_url'])}")
     message = "\n".join(lines)
     return {"status": "ready", "message": message,
             "loop_label": clean(contact["loop_label"]),
@@ -144,13 +150,18 @@ def main():
     parser.add_argument("--action", choices=("survey", "message"), default="message")
     parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
     parser.add_argument("--now", help="Timezone-aware ISO8601 time, for reproducible checks")
+    parser.add_argument("--days", type=int, default=30)
+    parser.add_argument("--months", type=int, default=6)
     args = parser.parse_args()
     try:
         now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(timezone.utc)
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("Timezone required")
+        if args.days < 1 or not 1 <= args.months <= 24:
+            raise ValueError("Invalid search horizon")
         data = json.load(sys.stdin)
-        result = survey(data["conferences"], now) if args.action == "survey" else compose(data, now=now)
+        result = (survey(data["conferences"], now, args.days, args.months) if args.action == "survey" else
+                  compose(data, now=now, days=args.days, months=args.months))
         if args.action == "survey" or args.format == "json":
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

@@ -68,6 +68,8 @@ def working_registry(bundle, now):
         raise ValueError("A current registry needs a fresh read trace")
     source = canonical(supplied.get("source_url"))
     ids = brand_ids(supplied.get("brands"))
+    if len(ids) * 2 < len(snapshot['brands']):
+        raise ValueError('Registry shrank by more than half; use selected_brand_ids for a subset')
     return ids, {"registry_source": source, "registry_fresh": True, "registry_snapshot_on": None}
 
 

@@ -157,7 +157,7 @@ class MonthlyDigestTests(unittest.TestCase):
         self.assertIn('Asia/Yekaterinburg',result['prompt'])
         self.assertIn('API',result['prompt'])
         self.assertNotIn('schedule',result['tool_arguments'])
-        self.assertIn('[vitech-events-radar:personal:v4]',result['prompt'])
+        self.assertIn('[vitech-events-radar:personal:v5]',result['prompt'])
 
     def test_refresh_without_saved_profile_needs_review(self):
         result=monthly.build_plan(setup(existing_tasks=[existing()],refresh_prompt=True),NOW)
@@ -173,10 +173,10 @@ class MonthlyDigestTests(unittest.TestCase):
                       'двумя короткими вопросами','без повторного согласования','Loop','Telegram'):
             self.assertIn(value,prompt)
 
-    def test_background_fallback_refreshes_registry_without_embedding_entire_snapshot(self):
+    def test_background_fallback_keeps_registry_and_audit_optional(self):
         prompt=monthly.build_plan(setup(),NOW)['task']['prompt']
-        self.assertIn('Состав и число брендов бери из прочитанной страницы',prompt)
-        self.assertIn('без него не выдумывай список',prompt)
+        self.assertIn('необязателен, не читай его',prompt)
+        self.assertIn('JSON-журнал и research_audit.py необязательны',prompt)
         self.assertIn('Открытый приём докладов пока не подтверждён',prompt)
         self.assertIn('Это не вывод об отсутствии возможностей',prompt)
         self.assertNotIn('Прочитай не менее 100',prompt)
@@ -184,6 +184,13 @@ class MonthlyDigestTests(unittest.TestCase):
         registry=json.loads((SCRIPT.parents[1]/'references/tech-brands.json').read_text())
         self.assertFalse(all(b['name'] in prompt for b in registry['brands']))
         self.assertLess(len(prompt),7000)
+
+    def test_fallback_separates_attendance_and_speaker_price(self):
+        prompt=monthly.build_plan(setup(),NOW)['task']['prompt']
+        for value in ('free_for_attendee=true','free_for_speaker=true',
+                      'Для слушателей платно, спикеры бесплатно','Закрытая программа',
+                      'HTML/публичном API','секциям','текстом'):
+            self.assertIn(value,prompt)
 
     def test_install_without_consent_cannot_produce_creation_arguments(self):
         data=setup();data.pop('monthly_enabled')

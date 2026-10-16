@@ -239,15 +239,24 @@ class TargetedSearchTests(unittest.TestCase):
         self.assertFalse(research.audit(data,NOW)['complete'])
 
     def test_current_registry_can_have_a_different_number_of_entries(self):
-        data=bundle();data['reads']=data['reads'][:2];data['brand_checks']=data['brand_checks'][:2]
-        brands=json.loads(research.REGISTRY.read_text())['brands'][:2]
+        data=bundle()
+        brands=json.loads(research.REGISTRY.read_text())['brands'][:-1]
+        data['reads']=data['reads'][:len(brands)]; data['brand_checks']=data['brand_checks'][:len(brands)]
         data['registry']=dict(source_url='https://habr.com/ru/specials/000001/',checked_at=NOW.isoformat(),
                               tool_ref='synthetic-current-registry',evidence='Synthetic changed registry',brands=brands)
         result=research.audit(data,NOW)
         self.assertTrue(result['complete'])
         self.assertTrue(result['registry_fresh'])
-        self.assertEqual(result['brands_total'],2)
-        self.assertEqual(result['brands_checked'],2)
+        self.assertEqual(result['brands_total'],len(brands))
+        self.assertEqual(result['brands_checked'],len(brands))
+
+    def test_three_brands_cannot_masquerade_as_a_full_fresh_registry(self):
+        data=self.targeted()
+        brands=json.loads(research.REGISTRY.read_text())['brands'][:3]
+        data['registry']=dict(source_url='https://habr.com/ru/specials/000001/',checked_at=NOW.isoformat(),
+                              tool_ref='synthetic-small-list',evidence='Synthetic selected names',brands=brands)
+        with self.assertRaisesRegex(ValueError, 'shrank'):
+            research.audit(data,NOW)
 
     def test_stale_malformed_or_duplicate_current_registry_is_rejected(self):
         base=self.targeted()
