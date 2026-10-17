@@ -157,7 +157,7 @@ class MonthlyDigestTests(unittest.TestCase):
         self.assertIn('Asia/Yekaterinburg',result['prompt'])
         self.assertIn('API',result['prompt'])
         self.assertNotIn('schedule',result['tool_arguments'])
-        self.assertIn('[vitech-events-radar:personal:v5]',result['prompt'])
+        self.assertIn('[vitech-events-radar:personal:v6]',result['prompt'])
 
     def test_refresh_without_saved_profile_needs_review(self):
         result=monthly.build_plan(setup(existing_tasks=[existing()],refresh_prompt=True),NOW)
@@ -188,7 +188,7 @@ class MonthlyDigestTests(unittest.TestCase):
     def test_fallback_separates_attendance_and_speaker_price(self):
         prompt=monthly.build_plan(setup(),NOW)['task']['prompt']
         for value in ('free_for_attendee=true','free_for_speaker=true',
-                      'Для слушателей платно, спикеры бесплатно','Закрытая программа',
+                      'Для слушателей платно, спикеры бесплатно','закрытая программа',
                       'HTML/публичном API','секциям','текстом'):
             self.assertIn(value,prompt)
 

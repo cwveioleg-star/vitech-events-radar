@@ -15,6 +15,7 @@ from check_candidates import speaker_reasons
 
 CONTACT_FILE = Path(__file__).resolve().parents[1] / "references/devrel-contact.md"
 STATES = {"has_idea", "no_idea"}
+HELP_FIND = "help_find"
 
 
 def clean(value, limit=500):
@@ -54,24 +55,27 @@ def eligible(conferences, now, days=30, months=6):
         if not isinstance(card, dict):
             raise ValueError("Invalid conference card")
         identity = clean(card.get("id"), 80)
-        if identity in ids or identity == "skip":
+        if identity in ids or identity in {"skip", HELP_FIND}:
             raise ValueError("Conference IDs must be unique")
         ids.add(identity)
-        if card.get("kind") in {"event", "cfp", "speaker"} and not speaker_reasons(card, now, days, months):
+        if card.get("kind") in {"event", "cfp", "speaker", "speaker_inquiry"} and not speaker_reasons(card, now, days, months):
             result.append(card)
     return result
 
 
 def survey(conferences, now=None, days=30, months=6):
     cards = eligible(conferences, now or datetime.now(timezone.utc), days, months)
-    if not cards:
-        return {"status": "no_verified_options", "questions": []}
     positions = {c['id']: i for i, c in enumerate(conferences, 1)}
+    labels = {'cfp': 'CFP открыт', 'speaker_inquiry': 'нужно уточнить возможность и условия выступления'}
     choices = [f"{positions[c['id']]}. {c['id']} · {c['name']} · " +
-               ("CFP открыт" if c['kind'] == 'cfp' else "возможность выступления нужно уточнить")
-               for c in cards[:9]] + ["skip · Пока не выбираю"]
+               labels.get(c['kind'], 'возможность выступления нужно уточнить')
+               for c in cards[:9]]
+    if not cards:
+        choices.append(f"{HELP_FIND} · Нужна помощь Олега с поиском площадки")
+    choices.append("skip · Пока не выбираю")
     return {"status": "ready", "questions": [
-        {"question": "Какое из этих событий тебе интересно для участия как спикеру?",
+        {"question": ("На какой площадке тебе нужна помощь с выступлением?" if cards else
+                      "Нужна помощь Олега с поиском площадки?"),
          "options": choices, "type": "single_select",
          "free_text_placeholder": "Можно написать номер события; новую конференцию сначала проверим"},
         {"question": "У тебя уже есть идея темы?",
@@ -91,7 +95,9 @@ def compose(data, contact=None, now=None, days=30, months=6):
         return {"status": "skipped", "message": None, "links": {}}
     cards = eligible(data.get("conferences"), now or datetime.now(timezone.utc), days, months)
     card = next((c for c in cards if c["id"] == identity), None)
-    if card is None:
+    if identity == HELP_FIND and cards:
+        raise ValueError("Choose a listed conference")
+    if card is None and identity != HELP_FIND:
         raise ValueError("Selected event needs a fresh verified card")
     state = choice.get("topic_state")
     if state not in STATES:
@@ -99,9 +105,13 @@ def compose(data, contact=None, now=None, days=30, months=6):
     topic = choice.get("topic")
     if topic is not None:
         topic = clean(topic)
-        if choice.get('topic_fit') != 'confirmed':
+        preliminary = identity == HELP_FIND or card['kind'] == 'speaker_inquiry'
+        if preliminary and choice.get('topic_fit') == 'mismatch':
+            raise ValueError('Adapt the topic or select another event')
+        if not preliminary and choice.get('topic_fit') != 'confirmed':
             raise ValueError('Check the topic against the event sections and rules first')
-        clean(choice.get('topic_fit_evidence'))
+        if not preliminary or choice.get('topic_fit') == 'confirmed':
+            clean(choice.get('topic_fit_evidence'))
         topic = re.sub(r'^(?:доклад|выступление|тема)\s+(?:на\s+тему|про|об|о)\s+', '', topic, flags=re.I)
         topic = re.sub(r'^тема\s*:\s*', '', topic, flags=re.I)
         topic = topic.strip(' «»“”"').rstrip('.!?').strip()
@@ -110,7 +120,14 @@ def compose(data, contact=None, now=None, days=30, months=6):
         raise ValueError("Conflicting topic answers")
     contact = contact or load_contact()
     topic_line = (f"Идея темы: «{topic}»." if topic else "У меня уже есть идея темы.") if state == "has_idea" else "Пока нет идеи темы."
+    if identity == HELP_FIND:
+        return {"status": "ready", "message": "\n".join([
+            clean(contact['greeting']), "Хочу попробовать выступить на IT-событии.", topic_line,
+            "Помоги, пожалуйста, подобрать подходящую площадку, уточнить условия и собрать фактуру."]),
+            "loop_label": clean(contact['loop_label']),
+            "links": {"loop": https(contact['loop_url']), "telegram": https(contact['telegram_url'])}}
     open_cfp = card["kind"] == "cfp"
+    inquiry = card['kind'] == 'speaker_inquiry'
     lines = [
         clean(contact["greeting"]),
         (f"Хочу выступить на конференции «{clean(card['name'])}»." if open_cfp else
@@ -119,6 +136,13 @@ def compose(data, contact=None, now=None, days=30, months=6):
     ]
     if open_cfp:
         lines.append("Помоги, пожалуйста, собрать фактуру и подготовиться к подаче.")
+    elif inquiry:
+        lines.append("Возможность и условия выступления нужно уточнить у организаторов.")
+        if card.get('free_for_speaker') is not True:
+            lines.append("Бесплатность участия спикера пока не подтверждена.")
+        if topic and choice.get('topic_fit') != 'confirmed':
+            lines.append("Соответствие идеи программе тоже нужно уточнить.")
+        lines.append("Помоги, пожалуйста, выяснить, можно ли выступить без обязательного взноса, и, если можно, собрать фактуру и подготовиться.")
     else:
         lines.append("Открытый приём докладов пока не подтверждён.")
         lines.append("Помоги, пожалуйста, выяснить, возможно ли участие как спикера, и, если возможно, собрать фактуру.")
@@ -127,6 +151,8 @@ def compose(data, contact=None, now=None, days=30, months=6):
     ]
     if open_cfp:
         lines.append(f"CFP: {https(card['url'])}")
+    elif inquiry:
+        lines.append(f"Организаторам: {https(card['organizer_contact_url'])}")
     else:
         lines.append(f"Спикерам: {https(card['speaker_url'])}")
     message = "\n".join(lines)

@@ -59,12 +59,12 @@ class SpeakingOptionTests(unittest.TestCase):
         c=card(); c.update(kind='event',registration='open',cfp_status='unknown',
                            starts_at='2026-10-20T10:00:00+03:00')
         self.assertEqual(GATE.reasons(c,NOW),[])
-        self.assertEqual(speaker.survey([c],NOW)['questions'],[])
+        self.assertEqual(speaker.eligible([c], NOW),[])
 
     def test_verified_inquiry_is_available_beyond_thirty_days(self):
         c=inquiry()
         self.assertEqual(GATE.reasons(c,NOW),[])
-        self.assertIn('нужно уточнить',speaker.survey([c],NOW)['questions'][0]['options'][0])
+        self.assertIn('нужно уточнить',speaker.survey([c], NOW)['questions'][0]['options'][0])
         message=speaker.compose(dict(conferences=[c],selection=payload()['selection']),now=NOW)['message']
         self.assertIn('Спикерам: https://example.org/speakers',message)
         self.assertNotIn('подготовиться к подаче',message)
@@ -73,12 +73,12 @@ class SpeakingOptionTests(unittest.TestCase):
         for patch in (dict(cfp_status='closed'),dict(program_final=True),dict(speaker_route='discussion'),
                       dict(speaker_route=None),dict(speaker_url='https://user:pass@example.org')):
             c=inquiry(); c.update(patch)
-            with self.subTest(patch=patch): self.assertEqual(speaker.survey([c],NOW)['questions'],[])
+            with self.subTest(patch=patch): self.assertEqual(speaker.eligible([c], NOW),[])
 
     def test_route_requires_readable_evidence_and_section_fit(self):
         for key in ('speaker_route','section'):
             c=inquiry(); c['evidence'].pop(key)
-            with self.subTest(key=key): self.assertEqual(speaker.survey([c],NOW)['questions'],[])
+            with self.subTest(key=key): self.assertEqual(speaker.eligible([c], NOW),[])
 
     def test_speaker_page_is_a_valid_inquiry_route(self):
         c=inquiry(); c['speaker_route']='speaker_page'
@@ -105,13 +105,13 @@ class SpeakingOptionTests(unittest.TestCase):
     def test_explicit_longer_window_applies_to_survey_and_message(self):
         c=card(); c['starts_at']='2027-05-01T10:00:00+03:00'
         data=dict(conferences=[c],selection=payload()['selection'])
-        self.assertEqual(speaker.survey([c],NOW)['questions'],[])
+        self.assertEqual(speaker.eligible([c], NOW),[])
         self.assertEqual(speaker.survey([c],NOW,months=8)['status'],'ready')
         self.assertEqual(speaker.compose(data,now=NOW,months=8)['status'],'ready')
 
     def test_expired_deadline_blocks_even_a_good_free_speaker(self):
         c=card(); c['deadline']=NOW.isoformat()
-        self.assertEqual(speaker.survey([c],NOW)['questions'],[])
+        self.assertEqual(speaker.eligible([c], NOW),[])
 
     def test_cli_accepts_paid_listener_free_speaker_and_rejects_attendance_only(self):
         c=card(); c['free_for_attendee']=False

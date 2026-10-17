@@ -55,9 +55,19 @@ def reasons(item, now, days=30, months=6):
             if item.get('free_for_attendee') is not True: bad.append('attendee price unconfirmed or paid')
             if start > now+timedelta(days=days): bad.append('outside window')
             if item.get('registration') not in ('open','not-required','not_required'): bad.append('registration unavailable')
-        elif item.get('kind') in ('cfp', 'speaker'):
-            keys.extend(['speaker_price', 'section'])
-            if item.get('free_for_speaker') is not True: bad.append('speaker price unconfirmed or paid')
+        elif item.get('kind') in ('cfp', 'speaker', 'speaker_inquiry'):
+            keys.append('section')
+            if item.get('program_final') is True or item.get('external_talks') is False:
+                bad.append('no available external talks')
+            inquiry = item.get('kind') == 'speaker_inquiry'
+            price = item.get('free_for_speaker')
+            if inquiry:
+                if price is not None and type(price) is not bool: bad.append('invalid speaker price status')
+                if price is False: bad.append('speaker fee required')
+                if price is True: keys.append('speaker_price')
+            else:
+                keys.append('speaker_price')
+                if price is not True: bad.append('speaker price unconfirmed or paid')
             attendee = item.get('free_for_attendee')
             if attendee is not None and type(attendee) is not bool:
                 bad.append('invalid attendee price status')
@@ -68,9 +78,22 @@ def reasons(item, now, days=30, months=6):
                 deadline=dt(item['deadline'])
                 if item.get('cfp_status') != 'open' or deadline <= now: bad.append('CFP closed')
                 if deadline >= start: bad.append('deadline not before conference')
-            else:
+            elif not inquiry:
                 keys.append('speaker_route')
                 bad.extend(speaker_route_reasons(item))
+                if item.get('deadline') is not None:
+                    deadline = dt(item['deadline'])
+                    if deadline <= now or deadline >= start: bad.append('CFP closed or invalid deadline')
+            else:
+                keys.append('speaker_contact')
+                if not public_url(item.get('organizer_contact_url', '')): bad.append('invalid organizer contact URL')
+                status = item.get('cfp_status', 'unknown')
+                if status not in ('unknown', 'not_announced', 'open'): bad.append('CFP closed')
+                if item.get('deadline') is not None:
+                    keys.append('deadline')
+                    deadline = dt(item['deadline'])
+                    if deadline <= now or deadline >= start: bad.append('CFP closed or invalid deadline')
+                elif status == 'open': bad.append('open CFP needs deadline')
         else: bad.append('unknown kind')
         if not all(isinstance(evidence.get(k),str) and evidence[k].strip() for k in keys): bad.append('missing evidence')
     except (KeyError, ValueError, TypeError, AttributeError): bad.append('invalid or missing date/fields')

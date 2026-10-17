@@ -74,14 +74,15 @@ class SpeakerContactTests(unittest.TestCase):
                          dict(checked_at='2026-10-01T09:00:00+03:00')]:
             c = card(); c.update(mutation)
             with self.subTest(mutation=mutation):
-                self.assertEqual(speaker.survey([c], NOW)['questions'], [])
+                self.assertEqual(speaker.eligible([c], NOW), [])
                 with self.assertRaises(ValueError):
                     speaker.compose(dict(conferences=[c], selection=payload()['selection']), now=NOW)
-        self.assertEqual(speaker.survey([], NOW)['status'], 'no_verified_options')
+        self.assertEqual(speaker.survey([], NOW)['status'], 'ready')
 
     def test_listed_event_without_cfp_can_be_selected_honestly(self):
         c=card(); c.update(kind='event',registration='open',cfp_status='unknown',
                            starts_at='2026-10-20T10:00:00+03:00',speaker_route='external_talks',speaker_url='https://example.org/speakers')
+        c.pop('deadline')
         survey=speaker.survey([c],NOW)
         self.assertEqual(survey['status'],'ready')
         self.assertIn('возможность выступления нужно уточнить',survey['questions'][0]['options'][0])
@@ -95,13 +96,14 @@ class SpeakerContactTests(unittest.TestCase):
         c=card(); c.update(kind='event',registration='open',cfp_status='closed',
                            starts_at='2026-10-20T10:00:00+03:00',
                            speaker_route='external_talks',speaker_url='https://example.org/speakers')
-        self.assertEqual(speaker.survey([c],NOW)['questions'], [])
+        self.assertEqual(speaker.eligible([c], NOW), [])
         with self.assertRaises(ValueError):
             speaker.compose(dict(conferences=[c],selection=payload()['selection']),now=NOW)
 
     def test_mixed_cards_keep_a_single_numbering_and_distinct_statuses(self):
         event=card(); event.update(id='event-1',kind='event',registration='open',cfp_status='unknown',
                                   starts_at='2026-10-20T10:00:00+03:00',speaker_route='external_talks',speaker_url='https://example.org/speakers')
+        event.pop('deadline')
         options=speaker.survey([event,card()],NOW)['questions'][0]['options']
         self.assertTrue(options[0].startswith('1. event-1'))
         self.assertTrue(options[1].startswith('2. qa-1'))
@@ -148,7 +150,7 @@ class SpeakerContactTests(unittest.TestCase):
 
     def test_credentials_in_links_are_rejected(self):
         c = card(); c['url'] = 'https://user:password@example.org/cfp'
-        self.assertEqual(speaker.survey([c], NOW)['questions'], [])
+        self.assertEqual(speaker.eligible([c], NOW), [])
 
     def test_survey_caps_options_at_ten(self):
         cards = []
